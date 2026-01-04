@@ -23,6 +23,12 @@ import {
 } from '../schemas/interview-quiz-result.schema';
 import { DocumentParserService } from './document-parser.service';
 import { InterviewAIService } from './interview-ai.service';
+import { AIInterviewType } from '../schemas/ai-interview-result.schema';
+import {
+  StartMockInterviewDto,
+  MockInterviewEventDto,
+  MockInterviewEventType,
+} from '../dto/mock-interview.dto';
 
 /**
  * 进度事件
@@ -46,6 +52,43 @@ export enum ConsumptionType {
   SPECIAL_INTERVIEW = 'special_interview', // 专项面试
   BEHAVIOR_INTERVIEW = 'behavior_interview', // 行测+HR面试
   AI_INTERVIEW = 'ai_interview', // AI模拟面试（如果使用次数计费）
+}
+
+/**
+ * 面试会话（内存中）
+ */
+interface InterviewSession {
+  sessionId: string; // 临时ID，用于这次面试
+  resultId?: string; // 数据库中的持久化ID
+  consumptionRecordId?: string; // 消费记录ID
+
+  // 用户信息
+  userId: string; // 用户ID
+  interviewType: AIInterviewType; // 面试类型（专项/综合）
+  interviewerName: string; // 面试官名字
+  candidateName?: string; // 候选人名字
+
+  // 岗位信息
+  company: string; // 公司名称
+  positionName: string; // 岗位名称
+  salaryRange?: string; // 薪资范围
+  jd: string; // 职位描述
+  resumeContent: string; // 简历内容（保存，用于后续问题生成）
+
+  // 对话历史
+  conversationHistory: Array<{
+    role: 'interviewer' | 'candidate';
+    content: string;
+    timestamp: Date;
+  }>;
+
+  // 进度追踪
+  questionCount: number; // 已问的问题数
+  startTime: Date; // 开始时间
+  targetDuration: number; // 预期时长（分钟）
+
+  // 状态
+  isActive: boolean; // 是否活跃（用于判断是否已结束）
 }
 
 /**
@@ -778,5 +821,93 @@ export class InterviewService {
 
     // 都没提供，返回错误
     throw new BadRequestException('请提供简历URL或简历内容');
+  }
+
+  /**
+   * 开始模拟面试（流式响应）
+   * @param userId 用户ID
+   * @param dto 请求参数
+   * @returns Subject 流式事件
+   */
+  startMockInterviewWithStream(
+    userId: string,
+    dto: StartMockInterviewDto,
+  ): Subject<MockInterviewEventDto> {
+    const subject = new Subject<MockInterviewEventDto>();
+    //  TODO：后续的执行逻辑
+    return subject;
+  }
+
+  /**
+   * 处理候选人回答（流式响应）
+   * @param userId 用户ID
+   * @param sessionId 会话ID
+   * @param answer 候选人回答
+   * @returns Subject 流式事件
+   */
+  answerMockInterviewWithStream(
+    userId: string,
+    sessionId: string,
+    answer: string,
+  ): Subject<MockInterviewEventDto> {
+    const subject = new Subject<MockInterviewEventDto>();
+
+    //  TODO：后续的执行逻辑
+
+    return subject;
+  }
+
+  /**
+   * 结束面试（用户主动结束）
+   * 使用 resultId（持久化）查询
+   */
+  async endMockInterview(userId: string, resultId: string): Promise<void> {
+    //  TODO：后续的执行逻辑
+  }
+
+  /**
+   * 暂停面试
+   * 使用 resultId（持久化）查询
+   */
+  async pauseMockInterview(
+    userId: string,
+    resultId: string,
+  ): Promise<{ resultId: string; pausedAt: Date }> {
+    //  TODO：后续的执行逻辑
+
+    return {
+      resultId: '',
+      pausedAt: new Date(),
+    };
+  }
+
+  /**
+   * 恢复面试
+   * 使用 resultId（持久化）查询
+   */
+  async resumeMockInterview(
+    userId: string,
+    resultId: string,
+  ): Promise<{
+    resultId: string;
+    sessionId: string;
+    currentQuestion: number;
+    totalQuestions: number;
+    lastQuestion?: string;
+    conversationHistory: Array<{
+      role: 'interviewer' | 'candidate';
+      content: string;
+      timestamp: Date;
+    }>;
+  }> {
+    //  TODO：后续的执行逻辑
+    return {
+      resultId,
+      sessionId: '',
+      currentQuestion: 0,
+      totalQuestions: 0,
+      lastQuestion: '',
+      conversationHistory: [],
+    };
   }
 }
