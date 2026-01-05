@@ -11,6 +11,7 @@ import {
   FORMAT_INSTRUCTIONS_ANALYSIS_ONLY,
 } from '../prompts/format-instructions.prompts';
 import { AIModelFactory } from '../../ai/services/ai-model.factory';
+import { buildMockInterviewPrompt } from '../prompts/mock-interview.prompts';
 /**
  * 简历押题输入
  */
@@ -222,5 +223,197 @@ export class InterviewAIService {
       );
       throw error;
     }
+  }
+
+  /**
+   * 生成模拟面试问题
+   * 该方法根据输入的上下文信息动态生成面试问题，并以流的方式逐步返回内容。
+   * 主要用于模拟面试的场景，提供一种流式的交互体验。
+   *
+   * @param context - 包含生成面试问题所需的上下文信息，包括面试类型、简历内容、公司信息、职位名称、职位描述、对话历史、已用时长和目标时长等。
+   *   - interviewType: 'special' | 'comprehensive'，表示面试的类型，是专项面试还是综合面试。
+   *   - resumeContent: string，表示候选人的简历内容。
+   *   - company?: string，表示公司名称（可选）。
+   *   - positionName?: string，表示职位名称（可选）。
+   *   - jd?: string，表示职位描述（可选）。
+   *   - conversationHistory: Array<{ role: 'interviewer' | 'candidate'; content: string }>，表示对话历史，包含角色（面试官或候选人）和发言内容。
+   *   - elapsedMinutes: number，表示已经进行的面试时长（分钟）。
+   *   - targetDuration: number，表示目标面试时长（分钟）。
+   *
+   * @returns AsyncGenerator<string> - 返回一个异步生成器，逐块返回流式生成的面试问题内容，直到面试问题生成完成。
+   *
+   * 该方法会进行以下步骤：
+   * 1. 构建动态的 Prompt（生成问题的提示模板）。
+   * 2. 创建 Prompt 模板并将其与 AI 模型连接。
+   * 3. 使用流式方式生成面试问题，逐块返回给调用方。
+   */
+  async *generateInterviewQuestionStream(context: {
+    interviewType: 'special' | 'comprehensive';
+    resumeContent: string;
+    company?: string;
+    positionName?: string;
+    jd?: string;
+    conversationHistory: Array<{
+      role: 'interviewer' | 'candidate';
+      content: string;
+    }>;
+    elapsedMinutes: number;
+    targetDuration: number;
+  }): AsyncGenerator<string> {
+    try {
+      // 第 1 步：构建 Prompt（动态的）
+      // 调用外部函数 buildMockInterviewPrompt，生成面试问题所需的提示内容
+      const prompt = buildMockInterviewPrompt(context);
+
+      // 第 2 步：创建 Prompt 模板
+      // 使用 PromptTemplate.fromTemplate() 方法，将构建好的 prompt 转化为可执行的模板
+      const promptTemplate = PromptTemplate.fromTemplate(prompt);
+
+      // 第 3 步：构建链（Prompt → LLM）
+      // 使用 AI 模型工厂创建一个默认的 AI 模型
+      const model = this.aiModelFactory.createDefaultModel();
+      // 将 prompt 模板和 AI 模型连接成一个管道（pipeline）
+      const chain = promptTemplate.pipe(model);
+
+      let fullContent = ''; // 用于存储生成的完整内容
+      const startTime = Date.now(); // 记录流式生成开始的时间
+
+      // 使用链条创建流式生成器进行异步生成
+      const stream = await chain.stream({
+        interviewType: context.interviewType, // 面试类型
+        resumeContent: context.resumeContent, // 简历内容
+        company: context.company || '', // 公司名称（若未提供为空）
+        positionName: context.positionName || '未提供', // 职位名称（若未提供，使用默认值）
+        jd: context.jd || '未提供', // 职位描述（若未提供，使用默认值）
+        conversationHistory: this.formatConversationHistory(
+          context.conversationHistory, // 格式化对话历史
+        ),
+        elapsedMinutes: context.elapsedMinutes, // 已用时长
+        targetDuration: context.targetDuration, // 目标时长
+      });
+
+      // 逐块返回内容
+      for await (const chunk of stream) {
+        const content = chunk.content?.toString() || ''; // 获取每个块的内容
+        if (content) {
+          fullContent += content; // 将每个块的内容拼接到完整内容中
+          yield content; // 立即返回当前块的内容给调用方
+        }
+      }
+
+      // 计算流式生成所花费的时间并记录日志
+      const duration = Date.now() - startTime;
+      this.logger.log(
+        `✅ 流式生成完成: 耗时=${duration}ms, 长度=${fullContent.length}`,
+      );
+
+      // 返回最终生成的完整内容
+      return this.parseInterviewResponse(fullContent, context);
+    } catch (error) {
+      // 错误处理：如果流式生成过程中出现任何异常，记录错误日志并抛出异常
+      this.logger.error(
+        `❌ 流式生成面试问题失败: ${error.message}`,
+        error.stack,
+      );
+      throw error;
+    }
+  }
+
+  /**
+   * 格式化对话历史
+   * 该方法将对话历史数组格式化为一段带有编号和角色标识的文本，
+   * 其中每条记录都包含了发言者的角色（面试官或候选人）和内容。
+   *
+   * @param history - 包含对话历史的数组，每个元素有两个属性：
+   *   - role: 'interviewer' | 'candidate'，表示发言者的角色，'interviewer' 表示面试官，'candidate' 表示候选人。
+   *   - content: string，表示发言的内容。
+   *
+   * @returns string - 返回格式化后的字符串，每条记录由编号、角色和内容组成，
+   *   如果历史为空或未传入，则返回一个提示信息（'（对话刚开始，这是候选人的自我介绍）'）。
+   */
+  private formatConversationHistory(
+    history: Array<{ role: 'interviewer' | 'candidate'; content: string }>,
+  ): string {
+    // 如果历史为空或没有数据，返回默认的提示文本
+    if (!history || history.length === 0) {
+      return '（对话刚开始，这是候选人的自我介绍）';
+    }
+
+    // 遍历对话历史，生成格式化后的文本
+    return (
+      history
+        .map((item, index) => {
+          // 根据发言者的角色决定文本中的标识，'面试官' 或 '候选人'
+          const role = item.role === 'interviewer' ? '面试官' : '候选人';
+          // 返回格式化后的文本：编号 + 角色 + 内容
+          return `${index + 1}. ${role}: ${item.content}`;
+        })
+        // 使用换行符连接每条记录，形成最终的多行字符串
+        .join('\n\n')
+    );
+  }
+
+  /**
+   * 解析AI的面试回应
+   * 该方法用于解析AI生成的面试回应内容。它从给定的面试回应中提取问题、标准答案以及是否应该结束面试的信息。
+   * 主要处理以下内容：
+   * - 是否包含结束标记，判断面试是否已经完成。
+   * - 提取标准答案（如果存在）。
+   * - 提取问题内容，并清理不需要的标记。
+   *
+   * @param content - AI生成的面试回应内容，包含问题、标准答案及可能的结束标记。
+   * @param context - 面试上下文，包含已用时间（elapsedMinutes）和目标时长（targetDuration）。
+   *
+   * @returns 返回一个对象，包含以下信息：
+   *   - question: 提取的面试问题内容。
+   *   - shouldEnd: 布尔值，表示面试是否应该结束。
+   *   - standardAnswer: 标准答案内容（如果有）。
+   *   - reasoning: 如果面试已经结束，提供结束理由（基于目标时长）。
+   */
+  private parseInterviewResponse(
+    content: string,
+    context: {
+      elapsedMinutes: number;
+      targetDuration: number;
+    },
+  ): {
+    question: string;
+    shouldEnd: boolean;
+    standardAnswer?: string;
+    reasoning?: string;
+  } {
+    // 第 1 步：检查是否包含结束标记 [END_INTERVIEW]
+    // 如果回应中包含 [END_INTERVIEW]，表示面试已经结束
+    const shouldEnd = content.includes('[END_INTERVIEW]');
+
+    // 第 2 步：提取标准答案
+    let standardAnswer: string | undefined;
+    let questionContent = content;
+
+    // 使用正则表达式匹配标准答案部分，提取 [STANDARD_ANSWER] 到 [END_INTERVIEW] 或结束位置的内容
+    const standardAnswerMatch = content.match(
+      /\[STANDARD_ANSWER\]([\s\S]*?)(?=\[END_INTERVIEW\]|$)/,
+    );
+
+    // 如果匹配到了标准答案，提取并去除多余的空格
+    if (standardAnswerMatch) {
+      standardAnswer = standardAnswerMatch[1].trim();
+      // 移除标准答案部分，只保留问题部分
+      questionContent = content.split('[STANDARD_ANSWER]')[0].trim();
+    }
+
+    // 第 3 步：移除结束标记
+    // 如果内容中有 [END_INTERVIEW]，去掉该标记，并进行清理
+    questionContent = questionContent.replace(/\[END_INTERVIEW\]/g, '').trim();
+
+    // 第 4 步：返回解析结果
+    return {
+      question: questionContent, // 提取的问题内容
+      shouldEnd: shouldEnd, // 是否需要结束面试
+      standardAnswer: standardAnswer, // 标准答案（如果存在）
+      reasoning: shouldEnd
+        ? `面试已达到目标时长（${context.elapsedMinutes}/${context.targetDuration}分钟）` // 如果结束，给出理由
+        : undefined,
+    };
   }
 }
