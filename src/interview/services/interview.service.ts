@@ -85,6 +85,7 @@ interface InterviewSession {
     role: 'interviewer' | 'candidate';
     content: string;
     timestamp: Date;
+    standardAnswer?: string; // 标准答案（仅面试官问题有）
   }>;
 
   // 进度追踪
@@ -1135,9 +1136,797 @@ export class InterviewService {
   ): Subject<MockInterviewEventDto> {
     const subject = new Subject<MockInterviewEventDto>();
 
-    //  TODO：后续的执行逻辑
-
+    // 异步执行
+    this.executeAnswerMockInterview(userId, sessionId, answer, subject).catch(
+      (error) => {
+        this.logger.error(`处理面试回答失败: ${error.message}`, error.stack);
+        if (subject && !subject.closed) {
+          subject.next({
+            type: MockInterviewEventType.ERROR,
+            error: error,
+          });
+          subject.complete();
+        }
+      },
+    );
     return subject;
+  }
+
+  /**
+   * 执行处理候选人回答
+   * @param userId 用户ID
+   * @param sessionId 会话ID
+   * @param answer 候选人回答
+   * @param progressSubject 用于实时推送面试进度的`Subject`对象，前端通过它接收流式数据。
+   * @returns Promise<void> - 返回一个 `Promise`，表示处理候选人回答的过程（包含异步操作）。
+   */
+  private async executeAnswerMockInterview(
+    userId: string,
+    sessionId: string,
+    answer: string,
+    progressSubject: Subject<MockInterviewEventDto>,
+  ): Promise<void> {
+    try {
+      // 1. 获取会话
+      const session = this.interviewSessions.get(sessionId);
+
+      if (!session) {
+        throw new NotFoundException('面试会话不存在或已过期');
+      }
+
+      if (session.userId !== userId) {
+        throw new BadRequestException('无权访问此面试会话');
+      }
+
+      if (!session.isActive) {
+        throw new BadRequestException('面试会话已结束');
+      }
+
+      // 2. 记录候选人回答
+      session.conversationHistory.push({
+        role: 'candidate',
+        content: answer,
+        timestamp: new Date(),
+      });
+
+      session.questionCount++;
+
+      // 3. 计算已用时间
+      const elapsedMinutes = Math.floor(
+        (Date.now() - session.startTime.getTime()) / 1000 / 60,
+      );
+
+      this.logger.log(`当前面试用时：${elapsedMinutes}分钟`);
+
+      this.logger.log(
+        `📝 候选人回答: sessionId=${sessionId}, questionCount=${session.questionCount}, elapsed=${elapsedMinutes}min`,
+      );
+
+      // 3.1 检查是否超时，需要强制结束面试
+      const maxDuration =
+        session.interviewType === MockInterviewType.SPECIAL
+          ? this.SPECIAL_INTERVIEW_MAX_DURATION
+          : this.BEHAVIOR_INTERVIEW_MAX_DURATION;
+
+      if (elapsedMinutes >= maxDuration) {
+        this.logger.log(
+          `⏰ 面试超时，强制结束: sessionId=${sessionId}, elapsed=${elapsedMinutes}min, max=${maxDuration}min`,
+        );
+
+        // 面试结束
+        session.isActive = false;
+
+        // 添加结束语
+        const closingStatement = `感谢您今天的面试表现。由于时间关系（已进行${elapsedMinutes}分钟），我们今天的面试就到这里。您的回答让我们对您有了较为全面的了解，后续我们会进行综合评估，有结果会及时通知您。祝您生活愉快！`;
+
+        session.conversationHistory.push({
+          role: 'interviewer',
+          content: closingStatement,
+          timestamp: new Date(),
+        });
+
+        // 保存面试结果
+        const resultId = await this.saveMockInterviewResult(session);
+
+        // 发送结束事件
+        progressSubject.next({
+          type: MockInterviewEventType.END,
+          sessionId,
+          content: closingStatement,
+          resultId,
+          elapsedMinutes,
+          isStreaming: false,
+          metadata: {
+            totalQuestions: session.questionCount,
+            interviewerName: session.interviewerName,
+            reason: 'timeout', // 标记为超时结束
+          },
+        });
+
+        // TODO: 异步生成评估报告（不阻塞返回）
+
+        // 清理会话（延迟清理）
+        setTimeout(
+          () => {
+            this.interviewSessions.delete(sessionId);
+            this.logger.log(`🗑️ 会话已清理: sessionId=${sessionId}`);
+          },
+          5 * 60 * 1000,
+        );
+
+        progressSubject.complete();
+        return; // 提前返回，不再继续生成下一个问题
+      }
+
+      // 4. 发送思考中事件
+      progressSubject.next({
+        type: MockInterviewEventType.THINKING,
+        sessionId,
+      });
+
+      // 5. 流式生成下一个问题
+      const questionStartTime = new Date(); // ✅ 记录问题开始生成的时间
+      let fullQuestion = '';
+      let aiResponse: {
+        question: string;
+        shouldEnd: boolean;
+        standardAnswer?: string;
+        reasoning?: string;
+      };
+
+      const questionGenerator = this.aiService.generateInterviewQuestionStream({
+        interviewType:
+          session.interviewType === MockInterviewType.SPECIAL
+            ? 'special'
+            : 'comprehensive',
+        resumeContent: session.resumeContent,
+        company: session.company || '',
+        positionName: session.positionName,
+        jd: session.jd,
+        conversationHistory: session.conversationHistory.map((h) => ({
+          role: h.role,
+          content: h.content,
+        })),
+        elapsedMinutes,
+        targetDuration: session.targetDuration,
+      });
+
+      // 逐块推送问题内容，并捕获返回值
+      let hasStandardAnswer = false; // 标记是否已检测到标准答案
+      let questionOnlyContent = ''; // 只包含问题的内容
+      let standardAnswerContent = ''; // 标准答案内容
+
+      try {
+        let result = await questionGenerator.next();
+        while (!result.done) {
+          const chunk = result.value;
+          fullQuestion += chunk;
+
+          // 检测是否包含标准答案标记
+          const standardAnswerIndex = fullQuestion.indexOf('[STANDARD_ANSWER]');
+
+          if (standardAnswerIndex !== -1) {
+            // 检测到标准答案标记
+            if (!hasStandardAnswer) {
+              // 第一次检测到，提取问题部分
+              questionOnlyContent = fullQuestion
+                .substring(0, standardAnswerIndex)
+                .trim();
+              hasStandardAnswer = true;
+
+              // 发送最终问题内容（标记流式完成）
+              progressSubject.next({
+                type: MockInterviewEventType.QUESTION,
+                sessionId,
+                interviewerName: session.interviewerName,
+                content: questionOnlyContent,
+                questionNumber: session.questionCount,
+                totalQuestions:
+                  session.interviewType === MockInterviewType.SPECIAL ? 12 : 8,
+                elapsedMinutes,
+                isStreaming: false, // ✅ 标记流式传输完成
+              });
+
+              // 立即发送等待事件，告诉前端问题已结束
+              progressSubject.next({
+                type: MockInterviewEventType.WAITING,
+                sessionId,
+              });
+
+              this.logger.log(
+                `✅ 问题生成完成，进入参考答案生成阶段: questionLength=${questionOnlyContent.length}`,
+              );
+            }
+
+            // 提取并流式推送参考答案
+            const currentStandardAnswer = fullQuestion
+              .substring(standardAnswerIndex + '[STANDARD_ANSWER]'.length)
+              .trim();
+
+            if (currentStandardAnswer.length > standardAnswerContent.length) {
+              standardAnswerContent = currentStandardAnswer;
+
+              // 流式推送参考答案
+              progressSubject.next({
+                type: MockInterviewEventType.REFERENCE_ANSWER,
+                sessionId,
+                interviewerName: session.interviewerName,
+                content: standardAnswerContent,
+                questionNumber: session.questionCount,
+                totalQuestions:
+                  session.interviewType === MockInterviewType.SPECIAL ? 12 : 8,
+                elapsedMinutes,
+                isStreaming: true, // 标记为流式传输中
+              });
+            }
+          } else {
+            // 还在生成问题阶段，继续推送
+            progressSubject.next({
+              type: MockInterviewEventType.QUESTION,
+              sessionId,
+              interviewerName: session.interviewerName,
+              content: fullQuestion,
+              questionNumber: session.questionCount,
+              totalQuestions:
+                session.interviewType === MockInterviewType.SPECIAL ? 12 : 8,
+              elapsedMinutes,
+              isStreaming: true, // 标记为流式传输中
+            });
+          }
+
+          result = await questionGenerator.next();
+        }
+
+        // Generator 完成后，发送参考答案的最终状态
+        if (hasStandardAnswer && standardAnswerContent) {
+          progressSubject.next({
+            type: MockInterviewEventType.REFERENCE_ANSWER,
+            sessionId,
+            interviewerName: session.interviewerName,
+            content: standardAnswerContent,
+            questionNumber: session.questionCount,
+            totalQuestions:
+              session.interviewType === MockInterviewType.SPECIAL ? 12 : 8,
+            elapsedMinutes,
+            isStreaming: false, // ✅ 标记流式传输完成
+          });
+        }
+
+        // Generator 完成，result.value 现在是返回值
+        aiResponse = result.value;
+
+        // 如果没有检测到标准答案标记（可能AI没有生成），使用完整内容
+        if (!hasStandardAnswer) {
+          questionOnlyContent = fullQuestion;
+          this.logger.warn(`⚠️ 未检测到标准答案标记，使用完整内容作为问题`);
+        }
+      } catch (error) {
+        // 如果生成器抛出错误，直接抛出
+        throw error;
+      }
+
+      // 6. 确保 session.resultId 存在
+      if (!session.resultId) {
+        this.logger.error(
+          `❌ session.resultId 不存在，无法保存数据: sessionId=${sessionId}`,
+        );
+        throw new Error('session.resultId 不存在，无法保存数据');
+      }
+
+      // 7. 【步骤1】保存上一轮的问答（更新用户回答）
+      // 在 conversationHistory 中：
+      // - length - 1: 刚 push 的用户回答
+      // - length - 2: 上一个面试官问题（用户回答的这个问题）
+      if (session.conversationHistory.length >= 2) {
+        const userAnswerIndex = session.conversationHistory.length - 1;
+        const prevQuestionIndex = session.conversationHistory.length - 2;
+
+        const prevQuestion = session.conversationHistory[prevQuestionIndex];
+        const userAnswer = session.conversationHistory[userAnswerIndex];
+
+        // 检查是否是开场白（开场白是第一条面试官消息，索引为0）
+        const isOpeningStatement = prevQuestionIndex === 0;
+
+        if (
+          prevQuestion.role === 'interviewer' &&
+          userAnswer.role === 'candidate'
+        ) {
+          if (isOpeningStatement) {
+            // 更新开场白的用户回答
+            await this.updateInterviewAnswer(
+              session.resultId,
+              0, // 开场白是第一项
+              userAnswer.content,
+              userAnswer.timestamp,
+              session, // 传递 session 用于更新 sessionState
+            );
+          } else {
+            // 更新上一个问题的用户回答
+            const qaIndex = session.questionCount - 1; // qaList 中的索引
+            await this.updateInterviewAnswer(
+              session.resultId,
+              qaIndex,
+              userAnswer.content,
+              userAnswer.timestamp,
+              session, // 传递 session 用于更新 sessionState
+            );
+          }
+        }
+      }
+
+      // 8. 【步骤2】在AI开始生成前，先创建占位项
+      // 查询当前 qaList 的长度以确定新问题的索引
+      const dbRecord = await this.aiInterviewResultModel.findOne({
+        resultId: session.resultId,
+      });
+      const newQAIndex = dbRecord?.qaList?.length || 0; // 新问题的索引
+
+      await this.createInterviewQuestionPlaceholder(
+        session.resultId,
+        questionStartTime,
+      );
+
+      // 9. 记录AI生成的新问题（包含标准答案）到内存
+      session.conversationHistory.push({
+        role: 'interviewer',
+        content: aiResponse.question,
+        timestamp: questionStartTime, // ✅ 使用问题开始生成时的时间
+        standardAnswer: aiResponse.standardAnswer, // 保存标准答案
+      });
+
+      // 10. 【步骤3】AI问题生成完成后，更新占位项的问题内容
+      await this.updateInterviewQuestion(
+        session.resultId,
+        newQAIndex,
+        aiResponse.question,
+        questionStartTime,
+      );
+
+      // 11. 【步骤4】AI标准答案生成完成后，更新标准答案
+      if (aiResponse.standardAnswer) {
+        await this.updateInterviewStandardAnswer(
+          session.resultId,
+          newQAIndex,
+          aiResponse.standardAnswer,
+        );
+      }
+
+      // 12. 更新 sessionState 到数据库
+      await this.aiInterviewResultModel.findOneAndUpdate(
+        { resultId: session.resultId },
+        {
+          $set: {
+            sessionState: session, // 同步会话状态
+          },
+        },
+      );
+
+      // 12. 判断是否结束面试
+      if (aiResponse.shouldEnd) {
+        // 面试结束
+        session.isActive = false;
+
+        // 保存面试结果
+        const resultId = await this.saveMockInterviewResult(session);
+
+        // 发送结束事件（标记流式完成）
+        progressSubject.next({
+          type: MockInterviewEventType.END,
+          sessionId,
+          content: aiResponse.question,
+          resultId,
+          elapsedMinutes,
+          isStreaming: false, // 流式传输完成
+          metadata: {
+            totalQuestions: session.questionCount,
+            interviewerName: session.interviewerName,
+          },
+        });
+
+        // 清理会话（延迟清理，给前端一些时间获取结果）
+        setTimeout(
+          () => {
+            this.interviewSessions.delete(sessionId);
+            this.logger.log(`🗑️ 会话已清理: sessionId=${sessionId}`);
+          },
+          5 * 60 * 1000,
+        ); // 5分钟后清理
+      } else {
+        // 继续面试 - 如果没有检测到标准答案，发送最终问题事件
+        if (!hasStandardAnswer) {
+          progressSubject.next({
+            type: MockInterviewEventType.QUESTION,
+            sessionId,
+            interviewerName: session.interviewerName,
+            content: aiResponse.question,
+            questionNumber: session.questionCount,
+            totalQuestions:
+              session.interviewType === MockInterviewType.SPECIAL ? 12 : 8,
+            elapsedMinutes,
+            isStreaming: false, // 流式传输完成
+          });
+
+          // 发送等待事件
+          progressSubject.next({
+            type: MockInterviewEventType.WAITING,
+            sessionId,
+          });
+        }
+        // 注意：如果已经检测到标准答案，前面已经发送过 isStreaming: false 和 WAITING 事件了
+      }
+
+      progressSubject.complete();
+    } catch (error) {
+      throw error;
+    }
+  }
+
+  /**
+   * 保存模拟面试结果（面试结束时调用）
+   * 如果已经通过实时保存创建了记录，则直接返回 resultId。
+   * 该方法的主要功能是根据面试会话保存最终的面试结果到数据库，并生成相关的消费记录。
+   *
+   * @param session - 面试会话对象，包含了此次模拟面试的所有信息，包括面试类型、会话状态、对话历史等。
+   *
+   * @returns Promise<string> - 返回面试结果ID（resultId），标识当前模拟面试的唯一结果。
+   */
+  private async saveMockInterviewResult(
+    session: InterviewSession,
+  ): Promise<string> {
+    try {
+      // 如果已经有 resultId（通过实时保存创建），直接返回
+      if (session.resultId) {
+        this.logger.log(
+          `✅ 使用已有的结果ID: resultId=${session.resultId}（已通过实时保存）`,
+        );
+
+        // 更新面试结果和消费记录为完成状态
+        await this.aiInterviewResultModel.findOneAndUpdate(
+          { resultId: session.resultId },
+          {
+            $set: {
+              status: 'completed', // 更新为已完成状态
+              completedAt: new Date(), // 设置完成时间
+              sessionState: session, // 保存最终会话状态（包括结束语）
+            },
+          },
+        );
+
+        // 如果有消费记录ID，更新消费记录的状态为成功
+        if (session.consumptionRecordId) {
+          await this.consumptionRecordModel.findOneAndUpdate(
+            { recordId: session.consumptionRecordId },
+            {
+              $set: {
+                completedAt: new Date(), // 设置消费记录完成时间
+                status: ConsumptionStatus.SUCCESS, // 标记消费状态为成功
+              },
+            },
+          );
+        }
+
+        return session.resultId; // 如果有 resultId，直接返回
+      }
+
+      // 如果没有 resultId（没有启用实时保存或出错），使用原有逻辑创建完整记录
+      const resultId = uuidv4(); // 生成新的 resultId
+      const recordId = uuidv4(); // 生成新的消费记录ID
+
+      // 构建问答列表（包含标准答案）
+      const qaList: any[] = [];
+      for (let i = 0; i < session.conversationHistory.length; i += 2) {
+        if (i + 1 < session.conversationHistory.length) {
+          qaList.push({
+            question: session.conversationHistory[i].content, // 问题内容
+            answer: session.conversationHistory[i + 1].content, // 答案内容
+            standardAnswer: session.conversationHistory[i].standardAnswer, // 标准答案（如果有）
+            answerDuration: 0, // 文字面试无法准确计算答题时间
+            answeredAt: session.conversationHistory[i + 1].timestamp, // 答题时间
+          });
+        }
+      }
+
+      // 计算面试时长（分钟）
+      const durationMinutes = Math.floor(
+        (Date.now() - session.startTime.getTime()) / 1000 / 60, // 转换为分钟
+      );
+
+      // 创建面试结果记录
+      await this.aiInterviewResultModel.create({
+        resultId,
+        user: new Types.ObjectId(session.userId),
+        userId: session.userId,
+        interviewType:
+          session.interviewType === MockInterviewType.SPECIAL
+            ? 'special'
+            : 'behavior',
+        company: session.company || '', // 公司名称
+        position: session.positionName, // 职位名称
+        salaryRange: session.salaryRange, // 工资范围
+        jobDescription: session.jd, // 职位描述
+        interviewDuration: durationMinutes, // 面试时长
+        interviewMode: 'text', // 模拟面试的模式（文字）
+        qaList, // 问答列表
+        totalQuestions: qaList.length, // 总问题数
+        answeredQuestions: qaList.length, // 已回答问题数
+        status: 'completed', // 设置为完成状态
+        completedAt: new Date(), // 设置完成时间
+        consumptionRecordId: recordId, // 消费记录ID
+        metadata: {
+          interviewerName: session.interviewerName, // 面试官姓名
+          candidateName: session.candidateName, // 候选人姓名
+        },
+      });
+
+      // 创建消费记录
+      await this.consumptionRecordModel.create({
+        recordId,
+        user: new Types.ObjectId(session.userId),
+        userId: session.userId,
+        type:
+          session.interviewType === MockInterviewType.SPECIAL
+            ? ConsumptionType.SPECIAL_INTERVIEW
+            : ConsumptionType.BEHAVIOR_INTERVIEW,
+        status: ConsumptionStatus.SUCCESS, // 消费状态成功
+        consumedCount: 1, // 消费次数
+        description: `模拟面试 - ${session.interviewType === MockInterviewType.SPECIAL ? '专项面试' : '综合面试'}`, // 描述
+        inputData: {
+          company: session.company || '',
+          positionName: session.positionName,
+          interviewType: session.interviewType,
+        },
+        outputData: {
+          resultId,
+          questionCount: qaList.length, // 问题数量
+          duration: durationMinutes, // 面试时长
+        },
+        resultId,
+        startedAt: session.startTime, // 开始时间
+        completedAt: new Date(), // 完成时间
+      });
+
+      this.logger.log(
+        `✅ 面试结果保存成功（完整创建）: resultId=${resultId}, duration=${durationMinutes}min`,
+      );
+
+      return resultId; // 返回生成的结果ID
+    } catch (error) {
+      // 出现异常时记录错误并抛出
+      this.logger.error(`❌ 保存面试结果失败: ${error.message}`, error.stack);
+      throw error;
+    }
+  }
+
+  /**
+   * 【步骤1】更新用户回答
+   * 在用户提交回答时调用。该方法用于更新面试结果中的用户回答内容，并在用户首次回答时增加回答计数。
+   * 另外，还可以同步更新面试会话的状态（sessionState），以便持续跟踪和保存面试进度。
+   *
+   * @param resultId - 面试结果的唯一标识符，用于查找对应的面试结果记录。
+   * @param qaIndex - 问题的索引，用于确定更新的是哪一个问题的回答。
+   * @param answer - 用户的回答内容。
+   * @param answeredAt - 用户提交回答的时间。
+   * @param session - 可选的 session 对象，用于更新面试会话的状态。
+   *
+   * @returns Promise<void> - 返回一个 `Promise`，表示更新操作的结果（没有返回值）。
+   */
+  private async updateInterviewAnswer(
+    resultId: string,
+    qaIndex: number,
+    answer: string,
+    answeredAt: Date,
+    session?: InterviewSession, // 可选的 session，用于更新 sessionState
+  ): Promise<void> {
+    try {
+      // 检查是否是第一次回答（避免重复增加计数）
+      // 查找面试结果，检查该问题是否已经有回答
+      const existingRecord = await this.aiInterviewResultModel.findOne({
+        resultId,
+      });
+
+      // 判断是否是第一次回答
+      const isFirstAnswer =
+        !existingRecord?.qaList[qaIndex]?.answer ||
+        existingRecord.qaList[qaIndex].answer === '';
+
+      // 更新操作的查询对象
+      const updateQuery: any = {
+        $set: {
+          [`qaList.${qaIndex}.answer`]: answer, // 更新当前问题的回答内容
+          [`qaList.${qaIndex}.answeredAt`]: answeredAt, // 更新回答时间
+        },
+      };
+
+      // 如果传递了 session（即存在面试会话），同步更新会话状态
+      if (session) {
+        updateQuery.$set.sessionState = session;
+      }
+
+      // 只有在第一次回答时，才增加已回答问题的计数
+      if (isFirstAnswer) {
+        updateQuery.$inc = { answeredQuestions: 1 }; // 增加回答的数量
+      }
+
+      // 更新面试结果记录，并返回更新后的记录
+      const result = await this.aiInterviewResultModel.findOneAndUpdate(
+        { resultId },
+        updateQuery,
+        { new: true }, // 获取更新后的记录
+      );
+
+      if (result) {
+        // 更新成功，记录日志
+        this.logger.log(
+          `✅ [步骤1] 更新用户回答成功: resultId=${resultId}, qaIndex=${qaIndex}, answer前50字=${answer.substring(0, 50)}..., isFirstAnswer=${isFirstAnswer}`,
+        );
+      } else {
+        // 更新失败，记录错误日志
+        this.logger.error(
+          `❌ [步骤1] 更新用户回答失败: 未找到 resultId=${resultId}`,
+        );
+      }
+    } catch (error) {
+      // 处理异常并记录错误
+      this.logger.error(
+        `❌ [步骤1] 更新用户回答异常: ${error.message}`,
+        error.stack,
+      );
+    }
+  }
+
+  /**
+   * 【步骤2】创建问题占位项
+   * 在AI开始生成问题前调用。该方法用于在面试结果中创建一个“问题占位项”，
+   * 以便在AI生成问题之前，能够先占据一个位置，保证面试流程的顺利进行。
+   * 这个占位项会在实际问题生成后更新为问题内容和答案。
+   *
+   * @param resultId - 面试结果的唯一标识符，用于查找对应的面试结果记录。
+   * @param askedAt - 问题生成的时间，通常是AI开始生成问题的时间。
+   *
+   * @returns Promise<void> - 返回一个 `Promise`，表示创建占位项的操作结果（没有返回值）。
+   */
+  private async createInterviewQuestionPlaceholder(
+    resultId: string,
+    askedAt: Date,
+  ): Promise<void> {
+    try {
+      // 创建问题占位项，表示问题正在生成中
+      const placeholderItem = {
+        question: '[生成中...]', // 占位文本，表示问题正在生成
+        answer: '', // 用户回答为空
+        standardAnswer: '', // 标准答案为空
+        answerDuration: 0, // 答案时长为空
+        askedAt: askedAt, // 问题生成的时间
+        answeredAt: null, // 答案时间为空，尚未回答
+      };
+
+      // 使用 findOneAndUpdate 更新面试记录，将占位项添加到 qaList 数组中
+      const result = await this.aiInterviewResultModel.findOneAndUpdate(
+        { resultId }, // 查找对应的面试结果记录
+        {
+          $push: { qaList: placeholderItem }, // 将占位项添加到 qaList
+          $inc: { totalQuestions: 1 }, // 更新总问题数
+        },
+        { new: true }, // 返回更新后的记录
+      );
+
+      if (result) {
+        // 更新成功，记录日志
+        this.logger.log(
+          `✅ [步骤2] 创建问题占位项成功: resultId=${resultId}, qaList长度=${result.qaList.length}`,
+        );
+      } else {
+        // 更新失败，记录错误日志
+        this.logger.error(
+          `❌ [步骤2] 创建问题占位项失败: 未找到 resultId=${resultId}`,
+        );
+      }
+    } catch (error) {
+      // 处理异常并记录错误
+      this.logger.error(
+        `❌ [步骤2] 创建问题占位项异常: ${error.message}`,
+        error.stack,
+      );
+    }
+  }
+
+  /**
+   * 【步骤3】更新问题内容
+   * 在AI问题生成完成后调用。该方法用于更新面试记录中的问题内容，
+   * 以便将AI生成的实际问题填充到相应的位置，从而更新占位符为具体的面试问题。
+   *
+   * @param resultId - 面试结果的唯一标识符，用于查找对应的面试结果记录。
+   * @param qaIndex - 问题的索引，用于确定更新的是哪一个问题。
+   * @param question - AI生成的实际问题内容。
+   * @param askedAt - 问题生成的时间，通常是AI生成问题的时间。
+   *
+   * @returns Promise<void> - 返回一个 `Promise`，表示更新操作的结果（没有返回值）。
+   */
+  private async updateInterviewQuestion(
+    resultId: string,
+    qaIndex: number,
+    question: string,
+    askedAt: Date,
+  ): Promise<void> {
+    try {
+      // 更新面试记录中的问题内容
+      const result = await this.aiInterviewResultModel.findOneAndUpdate(
+        { resultId }, // 查找对应的面试记录
+        {
+          $set: {
+            [`qaList.${qaIndex}.question`]: question, // 更新问题内容
+            [`qaList.${qaIndex}.askedAt`]: askedAt, // 更新问题生成时间
+          },
+        },
+        { new: true }, // 返回更新后的记录
+      );
+
+      if (result) {
+        // 更新成功，记录日志
+        this.logger.log(
+          `✅ [步骤3] 更新问题内容成功: resultId=${resultId}, qaIndex=${qaIndex}, question前50字=${question.substring(0, 50)}...`,
+        );
+      } else {
+        // 更新失败，记录错误日志
+        this.logger.error(
+          `❌ [步骤3] 更新问题内容失败: 未找到 resultId=${resultId}`,
+        );
+      }
+    } catch (error) {
+      // 处理异常并记录错误
+      this.logger.error(
+        `❌ [步骤3] 更新问题内容异常: ${error.message}`,
+        error.stack,
+      );
+    }
+  }
+
+  /**
+   * 【步骤4】更新标准答案
+   * 在AI标准答案生成完成后调用。该方法用于更新面试记录中的标准答案，
+   * 以便将AI生成的标准答案填充到相应的问题记录中，从而确保面试问题的完整性。
+   *
+   * @param resultId - 面试结果的唯一标识符，用于查找对应的面试记录。
+   * @param qaIndex - 问题的索引，用于确定更新的是哪一个问题的标准答案。
+   * @param standardAnswer - AI生成的标准答案内容。
+   *
+   * @returns Promise<void> - 返回一个 `Promise`，表示更新操作的结果（没有返回值）。
+   */
+  private async updateInterviewStandardAnswer(
+    resultId: string,
+    qaIndex: number,
+    standardAnswer: string,
+  ): Promise<void> {
+    try {
+      // 更新面试记录中的标准答案
+      const result = await this.aiInterviewResultModel.findOneAndUpdate(
+        { resultId }, // 查找对应的面试记录
+        {
+          $set: {
+            [`qaList.${qaIndex}.standardAnswer`]: standardAnswer, // 更新标准答案
+          },
+        },
+        { new: true }, // 返回更新后的记录
+      );
+
+      if (result) {
+        // 更新成功，记录日志
+        this.logger.log(
+          `✅ [步骤4] 更新标准答案成功: resultId=${resultId}, qaIndex=${qaIndex}, standardAnswer前50字=${standardAnswer.substring(0, 50)}...`,
+        );
+      } else {
+        // 更新失败，记录错误日志
+        this.logger.error(
+          `❌ [步骤4] 更新标准答案失败: 未找到 resultId=${resultId}`,
+        );
+      }
+    } catch (error) {
+      // 处理异常并记录错误
+      this.logger.error(
+        `❌ [步骤4] 更新标准答案异常: ${error.message}`,
+        error.stack,
+      );
+    }
   }
 
   /**
