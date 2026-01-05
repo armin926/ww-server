@@ -17,6 +17,10 @@ import {
   ResumeQuizResultSchema,
 } from './schemas/interview-quiz-result.schema';
 import { User, UserSchema } from '../user/schemas/user.schema';
+import {
+  AIInterviewResult,
+  AIInterviewResultSchema,
+} from './schemas/ai-interview-result.schema';
 
 @Module({
   imports: [
@@ -26,6 +30,7 @@ import { User, UserSchema } from '../user/schemas/user.schema';
       { name: ConsumptionRecord.name, schema: ConsumptionRecordSchema },
       { name: ResumeQuizResult.name, schema: ResumeQuizResultSchema },
       { name: User.name, schema: UserSchema },
+      { name: AIInterviewResult.name, schema: AIInterviewResultSchema },
     ]),
   ],
   controllers: [InterviewController],

@@ -416,4 +416,77 @@ export class InterviewAIService {
         : undefined,
     };
   }
+
+  /**
+   * 生成面试开场白（非流式）
+   * 该方法用于生成面试的开场白内容，根据面试官姓名、候选人姓名和职位名称动态生成问候语、职位信息和面试的开场提示。
+   *
+   * @param interviewerName - 面试官的姓名，用于问候候选人并提供称呼。
+   * @param candidateName - 候选人的姓名（可选），如果提供，问候语中会使用候选人的名字；如果未提供，默认使用“你”。
+   * @param positionName - 职位名称（可选），如果提供，开场白中会提到候选人申请的职位。
+   *
+   * @returns string - 返回生成的面试开场白内容，包含问候语、职位信息和自我介绍提示。
+   */
+  generateOpeningStatement(
+    interviewerName: string,
+    candidateName?: string,
+    positionName?: string,
+  ): string {
+    // 第 1 步：生成问候语
+    let greeting = candidateName ? `${candidateName}` : '你'; // 如果提供了候选人的名字，使用名字，否则使用“你”
+    greeting += '好，我是你今天的面试官，你可以叫我'; // 构建问候语前半部分
+    greeting += `${interviewerName}老师。\n\n`; // 添加面试官的名字，并以“老师”作为称呼
+
+    // 第 2 步：如果提供了职位名称，添加职位相关信息
+    if (positionName) {
+      greeting += `我看到你申请的是${positionName}岗位。\n\n`; // 如果职位名称存在，提到候选人申请的岗位
+    }
+
+    // 第 3 步：生成面试的开始提示
+    greeting +=
+      '让我们开始今天的面试吧。\n\n' + // 提示面试开始
+      '首先，请你简单介绍一下自己。自我介绍可以说明你的学历以及专业背景、工作经历以及取得的成绩等。'; // 提供自我介绍的指导
+
+    // 第 4 步：返回生成的开场白内容
+    return greeting;
+  }
+
+  /**
+   * 流式生成面试开场白（模拟打字机效果）
+   * 该方法使用流式生成的方式逐步返回面试开场白的内容，并模拟打字机效果。每次返回一小段字符，并通过延迟模拟打字的过程。
+   *
+   * @param interviewerName - 面试官的姓名，用于问候候选人并提供称呼。
+   * @param candidateName - 候选人的姓名（可选），如果提供，问候语中会使用候选人的名字；如果未提供，默认使用“你”。
+   * @param positionName - 职位名称（可选），如果提供，开场白中会提到候选人申请的职位。
+   *
+   * @returns AsyncGenerator<string, string, undefined> - 返回一个异步生成器，逐块返回流式的开场白内容片段。
+   * 每次返回3-8个字符，模拟打字机的效果。
+   */
+  async *generateOpeningStatementStream(
+    interviewerName: string,
+    candidateName?: string,
+    positionName?: string,
+  ): AsyncGenerator<string, string, undefined> {
+    // 第 1 步：生成完整的开场白
+    // 调用 generateOpeningStatement 方法生成完整的面试开场白内容
+    const fullGreeting = this.generateOpeningStatement(
+      interviewerName,
+      candidateName,
+      positionName,
+    );
+
+    // 第 2 步：按字符分块，每次返回3-8个字符，模拟打字效果
+    const chunkSize = 5; // 每次返回的字符块大小，模拟打字机效果的节奏
+    for (let i = 0; i < fullGreeting.length; i += chunkSize) {
+      // 截取从索引 i 到 i+chunkSize 的字符块
+      const chunk = fullGreeting.slice(i, i + chunkSize);
+      yield chunk; // 返回当前字符块
+
+      // 第 3 步：添加小延迟，模拟真实打字（可选）
+      await new Promise((resolve) => setTimeout(resolve, 20)); // 模拟每个字符的间隔时间
+    }
+
+    // 第 4 步：返回完整的开场白（即使已经通过流式返回了部分内容）
+    return fullGreeting;
+  }
 }
