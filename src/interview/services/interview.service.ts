@@ -1934,7 +1934,54 @@ export class InterviewService {
    * 使用 resultId（持久化）查询
    */
   async endMockInterview(userId: string, resultId: string): Promise<void> {
-    //  TODO：后续的执行逻辑
+    // 1. 从数据库查询面试记录
+    const dbResult = await this.aiInterviewResultModel.findOne({
+      resultId,
+      userId,
+    });
+
+    if (!dbResult) {
+      throw new NotFoundException('面试记录不存在');
+    }
+
+    if (dbResult.status === 'completed') {
+      throw new BadRequestException('面试已经结束');
+    }
+
+    // 2. 从 sessionState 获取会话
+    let session: InterviewSession;
+
+    if (dbResult.sessionState) {
+      session = dbResult.sessionState as InterviewSession;
+    } else {
+      throw new NotFoundException('无法加载面试状态');
+    }
+
+    // 3. 标记为已结束
+    session.isActive = false;
+
+    // 4. 添加面试结束语
+    const closingStatement = this.aiService.generateClosingStatement(
+      session.interviewerName,
+      session.candidateName,
+    );
+
+    session.conversationHistory.push({
+      role: 'interviewer',
+      content: closingStatement,
+      timestamp: new Date(),
+    });
+
+    // 5. 保存结果
+    await this.saveMockInterviewResult(session);
+
+    // TODO：6. 异步生成评估报告（不阻塞返回）
+
+    // 7. 从内存中清理会话（如果存在）
+    if (session.sessionId) {
+      this.interviewSessions.delete(session.sessionId);
+      this.logger.log(`🗑️ 会话已从内存清理: sessionId=${session.sessionId}`);
+    }
   }
 
   /**
@@ -1945,11 +1992,53 @@ export class InterviewService {
     userId: string,
     resultId: string,
   ): Promise<{ resultId: string; pausedAt: Date }> {
-    //  TODO：后续的执行逻辑
+    let pausedAt: Date;
+    try {
+      // 1. 从数据库查询面试记录
+      const dbResult = await this.aiInterviewResultModel.findOne({
+        resultId,
+        userId,
+      });
 
+      if (!dbResult) {
+        throw new NotFoundException('面试记录不存在');
+      }
+
+      if (dbResult.status === 'paused') {
+        throw new BadRequestException('面试已经暂停');
+      }
+
+      if (dbResult.status === 'completed') {
+        throw new BadRequestException('面试已经结束，无法暂停');
+      }
+
+      // 2. 更新记录为暂停状态
+      pausedAt = new Date();
+      await this.aiInterviewResultModel.findOneAndUpdate(
+        { resultId },
+        {
+          $set: {
+            status: 'paused',
+            pausedAt,
+          },
+        },
+      );
+
+      this.logger.log(`⏸️ 面试已暂停: resultId=${resultId}`);
+
+      // 3. 从内存中清理会话（如果存在）
+      const session = dbResult.sessionState as InterviewSession;
+      if (session?.sessionId) {
+        this.interviewSessions.delete(session.sessionId);
+        this.logger.log(`🗑️ 会话已从内存清理: sessionId=${session.sessionId}`);
+      }
+    } catch (error) {
+      this.logger.error(`❌ 暂停面试异常: ${error.message}`, error.stack);
+      throw error;
+    }
     return {
-      resultId: '',
-      pausedAt: new Date(),
+      resultId,
+      pausedAt,
     };
   }
 
@@ -1964,7 +2053,7 @@ export class InterviewService {
     resultId: string;
     sessionId: string;
     currentQuestion: number;
-    totalQuestions: number;
+    totalQuestions?: number;
     lastQuestion?: string;
     conversationHistory: Array<{
       role: 'interviewer' | 'candidate';
@@ -1972,14 +2061,71 @@ export class InterviewService {
       timestamp: Date;
     }>;
   }> {
-    //  TODO：后续的执行逻辑
-    return {
-      resultId,
-      sessionId: '',
-      currentQuestion: 0,
-      totalQuestions: 0,
-      lastQuestion: '',
-      conversationHistory: [],
-    };
+    try {
+      // 1. 从数据库查询面试记录
+      const dbResult = await this.aiInterviewResultModel.findOne({
+        resultId,
+        userId,
+        status: 'paused',
+      });
+
+      if (!dbResult) {
+        throw new NotFoundException('未找到可恢复的面试，或面试未暂停');
+      }
+
+      // 2. 从 sessionState 恢复会话
+      if (!dbResult.sessionState) {
+        throw new BadRequestException('会话数据不完整，无法恢复');
+      }
+
+      const session: InterviewSession =
+        dbResult.sessionState as InterviewSession;
+
+      // 确保会话数据完整
+      if (!session || !session.sessionId) {
+        throw new BadRequestException('会话数据不完整，无法恢复');
+      }
+
+      // 3. 重新激活会话并放回内存
+      session.isActive = true;
+      this.interviewSessions.set(session.sessionId, session);
+
+      // 4. 更新数据库状态
+      await this.aiInterviewResultModel.findOneAndUpdate(
+        { resultId },
+        {
+          $set: {
+            status: 'in_progress',
+            resumedAt: new Date(),
+            sessionState: session, // 更新会话状态
+          },
+        },
+      );
+
+      this.logger.log(
+        `▶️ 面试已恢复: resultId=${resultId}, sessionId=${session.sessionId}, questionCount=${session.questionCount}`,
+      );
+
+      // 5. 获取最后一个问题
+      let lastQuestion: string | undefined;
+      if (session.conversationHistory.length > 0) {
+        const lastEntry =
+          session.conversationHistory[session.conversationHistory.length - 1];
+        if (lastEntry.role === 'interviewer') {
+          lastQuestion = lastEntry.content;
+        }
+      }
+
+      return {
+        resultId,
+        sessionId: session.sessionId,
+        currentQuestion: session.questionCount,
+        lastQuestion,
+        conversationHistory: session.conversationHistory,
+      };
+    } catch (error) {
+      this.logger.error(`❌ 恢复面试异常: ${error.message}`, error.stack);
+      throw error;
+    }
   }
 }

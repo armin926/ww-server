@@ -489,4 +489,21 @@ export class InterviewAIService {
     // 第 4 步：返回完整的开场白（即使已经通过流式返回了部分内容）
     return fullGreeting;
   }
+
+  /**
+   * 生成面试结束语
+   */
+  generateClosingStatement(
+    interviewerName: string,
+    candidateName?: string,
+  ): string {
+    const name = candidateName || '候选人';
+    return (
+      `好的${name}，今天的面试就到这里。\n\n` +
+      `感谢你的时间和精彩的回答。整体来看，你的表现不错。\n\n` +
+      `我们会将你的面试情况反馈给用人部门，预计3-5个工作日内会给你答复。\n\n` +
+      `如果有任何问题，可以随时联系HR。祝你一切顺利！\n\n` +
+      `— ${interviewerName}老师`
+    );
+  }
 }

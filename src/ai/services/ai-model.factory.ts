@@ -48,7 +48,7 @@ export class AIModelFactory {
    */
   createDefaultModel(): ChatDeepSeek {
     const apiKey = this.configService.get<string>('DEEPSEEK_API_KEY');
-
+    this.logger.log('DEEPSEEK_API_KEY', apiKey);
     if (!apiKey) {
       this.logger.warn('DEEPSEEK_API_KEY 不存在');
     }
