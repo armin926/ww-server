@@ -93,6 +93,12 @@ export class WechatController {
         );
         return welcomeReply;
       }
+      // 用户的点击行为处理
+      else if (msgType === 'event' && event === 'CLICK') {
+        // 处理菜单点击事件
+        const reply = await this.wechatService.handleTextMessage(parsed.xml);
+        return reply;
+      }
 
       return 'success';
     } catch (error) {
@@ -129,4 +135,31 @@ export class WechatController {
       message: '等待扫码',
     };
   }
+
+  /**
+   * 创建公众号自定义菜单
+   */
+  @Post('create-menu')
+  async createMenu() {
+    const result = await this.wechatService.createMenu();
+    return ResponseUtil.success(result, '创建菜单成功');
+  }
+
+  // /**
+  //  * 删除公众号自定义菜单
+  //  */
+  // @Post('delete-menu')
+  // async deleteMenu() {
+  //   const result = await this.wechatService.deleteMenu();
+  //   return ResponseUtil.success(result, '删除菜单成功');
+  // }
+
+  // /**
+  //  * 获取公众号自定义菜单
+  //  */
+  // @Get('get-menu')
+  // async getMenu() {
+  //   const result = await this.wechatService.getMenu();
+  //   return ResponseUtil.success(result, '获取菜单成功');
+  // }
 }

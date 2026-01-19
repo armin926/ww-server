@@ -10,3 +10,20 @@ export function buildTextReply(msg, content: string) {
       </xml>
     `;
 }
+
+/**
+ * 构造图片回复
+ */
+export function buildImageReply(msg: any, mediaId: string): string {
+  return `
+    <xml>
+      <ToUserName><![CDATA[${msg.FromUserName}]]></ToUserName>
+      <FromUserName><![CDATA[${msg.ToUserName}]]></FromUserName>
+      <CreateTime>${Math.floor(Date.now() / 1000)}</CreateTime>
+      <MsgType><![CDATA[image]]></MsgType>
+      <Image>
+        <MediaId><![CDATA[${mediaId}]]></MediaId>
+      </Image>
+    </xml>
+  `.trim();
+}
