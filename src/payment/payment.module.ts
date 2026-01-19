@@ -4,6 +4,7 @@ import { MongooseModule } from '@nestjs/mongoose';
 import { PaymentController } from './payment.controller';
 import { PaymentService } from './payment.service';
 import { AlipayPaymentService } from './providers/alipay-payment.service';
+import { WechatPaymentService } from './providers/wechat-payment.service';
 import { PaymentRecord, PaymentRecordSchema } from './payment-record.schema';
 import { User, UserSchema } from '../user/schemas/user.schema';
 
@@ -16,7 +17,7 @@ import { User, UserSchema } from '../user/schemas/user.schema';
     ]),
   ],
   controllers: [PaymentController],
-  providers: [PaymentService, AlipayPaymentService],
+  providers: [PaymentService, AlipayPaymentService, WechatPaymentService],
   exports: [PaymentService],
 })
 export class PaymentModule {}

@@ -10,6 +10,8 @@ import {
   PaymentRecordStatus,
 } from './payment-record.schema';
 import { AlipayPaymentService } from './providers/alipay-payment.service';
+import { WechatPaymentService } from './providers/wechat-payment.service';
+
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 
@@ -20,6 +22,7 @@ export class PaymentService {
     @InjectModel(PaymentRecord.name)
     private readonly paymentRecordModel: Model<PaymentRecordDocument>,
     private readonly alipayPayment: AlipayPaymentService,
+    private readonly wechatPayment: WechatPaymentService,
   ) {}
 
   // 进行套餐逻辑验证
@@ -87,6 +90,23 @@ export class PaymentService {
 
     payload.metadata = this.buildPaymentMetadata(dto, payload, user?.userId);
 
+    // 创建支付记录，保存元数据到数据库（解决微信元数据缓存问题）
+    await this.paymentRecordModel.create({
+      orderId: payload.orderId,
+      userId: user?.userId,
+      user: user?.userId ? new Types.ObjectId(user.userId) : undefined,
+      channel: dto.channel,
+      amount: payload.amount,
+      currency: payload.currency,
+      planId: payload.planId,
+      planName: payload.planName,
+      source: payload.source,
+      description: payload.description,
+      status: PaymentRecordStatus.PENDING,
+      metadata: payload.metadata,
+      createdAt: new Date().toISOString(),
+    });
+
     this.logger.log(
       `创建支付订单记录: orderId=${payload.orderId}, channel=${dto.channel}, amount=${payload.amount}, userId=${user?.userId}`,
     );
@@ -96,11 +116,9 @@ export class PaymentService {
       // 支付宝支付
       return this.alipayPayment.initiatePayment(payload);
     }
-    // TODO：临时防爆错
-    return this.alipayPayment.initiatePayment(payload);
 
     // 微信支付 - 不再需要内存缓存，元数据已保存到数据库
-    // return this.wechatPayment.initiatePayment(payload);
+    return this.wechatPayment.initiatePayment(payload);
   }
 
   /**
