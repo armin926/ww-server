@@ -19,6 +19,7 @@ import {
   StartMockInterviewDto,
 } from './dto/mock-interview.dto';
 import { ResponseUtil } from '../common/utils/response.util';
+import { ExchangePackageDto } from './dto/exchange-package.dto';
 
 @Controller('interview')
 export class InterviewController {
@@ -302,5 +303,19 @@ export class InterviewController {
     );
 
     return ResponseUtil.success(report, '查询成功');
+  }
+
+  /**
+   * 使用旺旺币兑换套餐
+   */
+  @Post('exchange-package')
+  @UseGuards(JwtAuthGuard)
+  async exchangePackage(@Body() dto: ExchangePackageDto, @Request() req: any) {
+    const result = await this.interviewService.exchangePackage(
+      req.user.userId,
+      dto.packageType,
+    );
+
+    return ResponseUtil.success(result, result.message);
   }
 }
