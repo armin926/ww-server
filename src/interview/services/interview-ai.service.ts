@@ -15,6 +15,8 @@ import {
   buildMockInterviewPrompt,
   buildAssessmentPrompt,
 } from '../prompts/mock-interview.prompts';
+import { LogAICall } from '../../common/decorators/log-ai-call.decorator';
+
 /**
  * 简历押题输入
  */
@@ -105,6 +107,7 @@ export class InterviewAIService {
    * 生成简历押题 - 仅押题部分（问题 + 综合评估）
    * 返回：问题列表 + 综合评估 summary
    */
+  @LogAICall('generateResumeQuiz')
   async generateResumeQuizQuestionsOnly(
     input: ResumeQuizInput,
   ): Promise<{ questions: any[]; summary: string }> {

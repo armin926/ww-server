@@ -21,6 +21,10 @@ import {
   AIInterviewResult,
   AIInterviewResultSchema,
 } from './schemas/ai-interview-result.schema';
+import {
+  UserTransaction,
+  UserTransactionSchema,
+} from '../user/schemas/user-transaction.schema';
 
 @Module({
   imports: [
@@ -31,6 +35,7 @@ import {
       { name: ResumeQuizResult.name, schema: ResumeQuizResultSchema },
       { name: User.name, schema: UserSchema },
       { name: AIInterviewResult.name, schema: AIInterviewResultSchema },
+      { name: UserTransaction.name, schema: UserTransactionSchema },
     ]),
   ],
   controllers: [InterviewController],

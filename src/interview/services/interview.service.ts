@@ -45,6 +45,8 @@ import {
   UserTransactionType,
 } from '../../user/schemas/user-transaction.schema';
 
+import { traceIdStorage } from '../../common/middleware/trace-id.middleware';
+
 /**
  * 进度事件
  */
@@ -162,6 +164,7 @@ export class InterviewService {
     jobDescription: string,
   ) {
     try {
+      const traceId = traceIdStorage.getStore();
       // 第一步：创建新会话
       const systemMessage = RESUME_ANALYSIS_SYSTEM_MESSAGE(position);
       const sessionId = this.sessionManager.createSession(
@@ -170,7 +173,7 @@ export class InterviewService {
         systemMessage,
       );
 
-      this.logger.log(`创建会话: ${sessionId}`);
+      this.logger.log(`[${traceId}]创建会话: ${sessionId}`);
 
       // 第二步：调用专门的简历分析服务
       const result = await this.resumeAnalysisService.analyze(

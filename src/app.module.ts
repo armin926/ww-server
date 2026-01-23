@@ -1,9 +1,11 @@
-import { Module } from '@nestjs/common';
+import { MiddlewareConsumer, Module, NestModule } from '@nestjs/common';
 import { APP_FILTER, APP_INTERCEPTOR } from '@nestjs/core';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { MongooseModule } from '@nestjs/mongoose';
 import { JwtModule } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
+import { WinstonModule } from 'nest-winston';
+import * as winston from 'winston';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { UserModule } from './user/user.module';
@@ -15,6 +17,7 @@ import { ResponseInterceptor } from './common/interceptors/response.interceptor'
 import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
 import { JwtStrategy } from './auth/jwt.strategy';
 import { getTokenExpirationSeconds } from './common/utils/jwt.util';
+import { TraceIdMiddleware } from './common/middleware/trace-id.middleware';
 
 @Module({
   imports: [
@@ -25,6 +28,17 @@ import { getTokenExpirationSeconds } from './common/utils/jwt.util';
     MongooseModule.forRoot(
       process.env.MONGODB_URI || 'mongodb://localhost:27017/wwzhidao',
     ),
+    WinstonModule.forRoot({
+      format: winston.format.combine(
+        winston.format.timestamp({ format: 'YYYY-MM-DD HH:mm:ss' }),
+        winston.format.ms(),
+        winston.format.json(),
+      ),
+      defaultMeta: {
+        service: 'wwzhidao-server',
+      },
+      transports: [new winston.transports.Console()],
+    }),
     PassportModule,
     JwtModule.registerAsync({
       imports: [ConfigModule],
@@ -60,4 +74,8 @@ import { getTokenExpirationSeconds } from './common/utils/jwt.util';
     },
   ],
 })
-export class AppModule {}
+export class AppModule implements NestModule {
+  configure(consumer: MiddlewareConsumer) {
+    consumer.apply(TraceIdMiddleware).forRoutes('*');
+  }
+}
