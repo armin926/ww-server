@@ -18,6 +18,7 @@ import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
 import { JwtStrategy } from './auth/jwt.strategy';
 import { getTokenExpirationSeconds } from './common/utils/jwt.util';
 import { TraceIdMiddleware } from './common/middleware/trace-id.middleware';
+import { MetricsInterceptor } from './common/interceptors/metrics.interceptor';
 
 @Module({
   imports: [
@@ -71,6 +72,10 @@ import { TraceIdMiddleware } from './common/middleware/trace-id.middleware';
     {
       provide: APP_FILTER,
       useClass: AllExceptionsFilter,
+    },
+    {
+      provide: APP_INTERCEPTOR,
+      useClass: MetricsInterceptor,
     },
   ],
 })
