@@ -19,6 +19,7 @@ import { JwtStrategy } from './auth/jwt.strategy';
 import { getTokenExpirationSeconds } from './common/utils/jwt.util';
 import { TraceIdMiddleware } from './common/middleware/trace-id.middleware';
 import { MetricsInterceptor } from './common/interceptors/metrics.interceptor';
+import { MetricsModule } from './common/metrics/metrics.module';
 
 @Module({
   imports: [
@@ -60,6 +61,7 @@ import { MetricsInterceptor } from './common/interceptors/metrics.interceptor';
     PaymentModule,
     StsModule,
     InterviewModule,
+    MetricsModule,
   ],
   controllers: [AppController],
   providers: [
@@ -73,10 +75,7 @@ import { MetricsInterceptor } from './common/interceptors/metrics.interceptor';
       provide: APP_FILTER,
       useClass: AllExceptionsFilter,
     },
-    {
-      provide: APP_INTERCEPTOR,
-      useClass: MetricsInterceptor,
-    },
+    MetricsInterceptor,
   ],
 })
 export class AppModule implements NestModule {
