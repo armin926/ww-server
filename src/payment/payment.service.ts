@@ -631,18 +631,25 @@ export class PaymentService {
         return;
     }
 
-    await this.incrementUserBenefits(context.userId, increments);
+    // 🔒 传递订单号以确保幂等性
+    await this.incrementUserBenefits(
+      context.userId,
+      increments,
+      context.outTradeNo,
+    );
   }
 
   /**
-   * 增量更新用户权益
+   * 增量更新用户权益（幂等操作）
    * @param userId 用户ID
    * @param increments 增量
+   * @param orderId 订单号（用于幂等性保证）
    * @returns 增量更新用户权益结果
    */
   private async incrementUserBenefits(
     userId: string,
     increments: Record<string, number>,
+    orderId: string,
   ) {
     // 过滤出有效增量
     const entries = Object.entries(increments).filter(
@@ -667,13 +674,36 @@ export class PaymentService {
       {} as Record<string, number>,
     );
 
-    // 增量更新用户权益
+    // 🔒 幂等性保证：使用订单号作为唯一标识
+    // 只有当用户的 processedOrders 中不包含当前订单号时才执行更新
     const updatedUser = await this.userModel
-      .findByIdAndUpdate(userId, { $inc: inc }, { new: false })
+      .findOneAndUpdate(
+        {
+          _id: userId,
+          processedOrders: { $ne: orderId }, // 订单未处理过
+        },
+        {
+          $inc: inc, // 增加权益
+          $push: { processedOrders: orderId }, // 记录已处理的订单
+        },
+        { new: false },
+      )
       .exec();
 
     if (!updatedUser) {
-      this.logger.warn(`未找到用户 ${userId}，权益更新失败`);
+      // 检查是订单已处理还是用户不存在
+      const user = await this.userModel.findById(userId).exec();
+      if (!user) {
+        this.logger.warn(`未找到用户 ${userId}，权益更新失败`);
+      } else {
+        this.logger.warn(
+          `订单 ${orderId} 已为用户 ${userId} 发放过权益，跳过重复处理`,
+        );
+      }
+    } else {
+      this.logger.log(
+        `成功为用户 ${userId} 发放订单 ${orderId} 的权益: ${JSON.stringify(inc)}`,
+      );
     }
   }
 

@@ -76,6 +76,10 @@ export class User {
   @Prop({ default: 0 })
   behaviorRemainingCount: number; // 综合面试剩余次数
 
+  // 🔒 幂等性保证：记录已处理的订单号，防止重复发放权益
+  @Prop({ type: [String], default: [] })
+  processedOrders: string[]; // 已处理的订单号列表
+
   // 用户行为追踪
   @Prop()
   lastLoginTime?: Date; // 最近登录时间
