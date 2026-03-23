@@ -1,7 +1,8 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
-import { Document } from 'mongoose';
+import { Document, HydratedDocument } from 'mongoose';
+import * as bcrypt from 'bcryptjs';
 
-export type UserDocument = User & Document;
+export type UserDocument = HydratedDocument<User>;
 
 @Schema({ timestamps: true })
 export class User {
@@ -27,8 +28,8 @@ export class User {
   @Prop({ default: false })
   isActive: boolean; // 账号是否激活
 
-  @Prop()
-  password: string;
+  @Prop({ required: true })
+  password?: string;
 
   // 用户个人信息
   @Prop()
@@ -104,3 +105,23 @@ export class User {
 }
 
 export const UserSchema = SchemaFactory.createForClass(User);
+
+// 保存前加密密码
+UserSchema.pre('save', async function (this: UserDocument) {
+  // 如果密码没有修改则返回，不进行加密
+  if (!this.isModified('password')) return;
+  // 生成盐值（加密密码），盐值越长越安全，也就越慢，所以需要考虑性能问题
+  const salt = await bcrypt.genSalt(10);
+  if (this.password) {
+    // 加密密码
+    this.password = await bcrypt.hash(this.password, salt);
+  }
+});
+
+// 添加比较密码的方法
+UserSchema.methods.comparePassword = async function (
+  this: UserDocument,
+  enteredPassword: string,
+) {
+  return await bcrypt.compare(enteredPassword, this.password!);
+};
