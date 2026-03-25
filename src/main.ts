@@ -1,9 +1,12 @@
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
-import { ValidationPipe } from '@nestjs/common';
+import { ValidationPipe, LogLevel } from '@nestjs/common';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
+  const logLevels: LogLevel[] = ['log', 'error', 'warn', 'debug', 'verbose'];
+  const app = await NestFactory.create(AppModule, {
+    logger: logLevels,
+  });
 
   // 全局验证管道
   app.useGlobalPipes(
