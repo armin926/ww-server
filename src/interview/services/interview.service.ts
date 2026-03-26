@@ -1,9 +1,9 @@
-import { PromptTemplate } from '@langchain/core/prompts';
-import { JsonOutputParser } from '@langchain/core/output_parsers';
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { AIModelFactory } from '../../ai/services/ai-model.factory';
-import { RESUME_QUIZ_PROMPT } from '../prompt/resume-quiz.prompt';
+import { SessionManager } from '../../ai/services/session.manager';
+import { ResumeAnalysisService } from './resume-analysis.service';
+import { ConversationContinuationService } from './conversation-continuation.service';
+import { RESUME_ANALYSIS_SYSTEM_MESSAGE } from '../prompt/resume-quiz.prompt';
 
 @Injectable()
 export class InterviewService {
@@ -11,38 +11,92 @@ export class InterviewService {
 
   constructor(
     private configService: ConfigService,
-    private aiModelFactory: AIModelFactory, // 注入 AI 模型工厂
+    private sessionManager: SessionManager,
+    private resumeAnalysisService: ResumeAnalysisService,
+    private conversationContinuationService: ConversationContinuationService,
   ) {}
 
   /**
-   * 分析简历并生成报告
-   * @param resumeContent 简历的文本内容
-   * @param jobDescription 岗位要求
-   * @returns 分析结果，包含工作年限、技能、匹配度等信息
+   * 分析简历（首轮，建立会话）
+   * @param userId 用户ID
+   * @param posistion 岗位
+   * @param resumeContent 简历内容
+   * @param jobDescription 岗位描述
    */
-  async analyzeResume(resumeContent: string, jobDescription: string) {
-    // 创建 prompt 模版
-    const prompt = PromptTemplate.fromTemplate(RESUME_QUIZ_PROMPT);
-    // 通过工厂获取模型（而不是自己初始化）
-    const model = this.aiModelFactory.createDefaultModel();
-    // 创建输出解析器
-    const parser = new JsonOutputParser();
-    // 创建链：Prompt -> 模型 -> 解析器
-    // pipe是什么？ 管道，用于将一个函数的输出作为另一个函数的输入
-    // 这里的意思是：prompt的输出（格式化后的Prompt）输入给model，model的输出（模型生成的文本）输入给parser，
-    // parser的输出（解析后的对象）->最终得到解析结果
-    const chain = prompt.pipe(model).pipe(parser);
-
+  async analyzeResume(
+    userId: string,
+    posistion: string,
+    resumeContent: string,
+    jobDescription: string,
+  ) {
     try {
-      this.logger.log('开始分析简历');
-      const result = await chain.invoke({
-        resume_content: resumeContent,
-        job_description: jobDescription,
-      });
-      this.logger.log('简历分析完成');
-      return result;
+      // 第一步：创建新会话
+      const systemMessage = RESUME_ANALYSIS_SYSTEM_MESSAGE(posistion);
+      const sessionId = this.sessionManager.createSession(
+        userId,
+        posistion,
+        systemMessage,
+      );
+      this.logger.log(`创建会话：${sessionId}`);
+      // 第二步：调用专门的简历分析服务
+      const result = await this.resumeAnalysisService.analyze(
+        resumeContent,
+        jobDescription,
+      );
+      // 第三步：保存用户输入到历史会话
+      this.sessionManager.addMessage(
+        sessionId,
+        'user',
+        `简历内容：${resumeContent}`,
+      );
+      // 第四步：保存AI的回复到历史会话
+      this.sessionManager.addMessage(
+        sessionId,
+        'assistant',
+        JSON.stringify(result),
+      );
+      this.logger.log(`简历分析完成，sessionId: ${sessionId}`);
+
+      return {
+        sessionId,
+        analysis: result,
+      };
     } catch (error) {
       this.logger.error('简历分析失败', error);
+      throw error;
+    }
+  }
+
+  /**
+   * 继续对话（多轮，基于现有会话）
+   *
+   * @param sessionId 会话ID
+   * @param userQuestion 用户问题
+   * @returns AI的回复
+   */
+  async continueConversation(
+    sessionId: string,
+    userQuestion: string,
+  ): Promise<string> {
+    try {
+      // 第一步：添加用户问题到历史会话
+      this.sessionManager.addMessage(sessionId, 'user', userQuestion);
+      // 第二步：获取历史对话
+      const history = this.sessionManager.getRecentMessages(sessionId, 10);
+
+      this.logger.log(
+        `继续对话，sessionId: ${sessionId}，历史消息数：${history.length}`,
+      );
+
+      // 第三步：调用专门的对话继续服务
+      const aiResponse =
+        await this.conversationContinuationService.continue(history);
+      // 第四步：保存AI的回答到历史会话
+      this.sessionManager.addMessage(sessionId, 'assistant', aiResponse);
+      this.logger.log(`继续对话完成，sessionId: ${sessionId}`);
+      return aiResponse;
+    } catch (error) {
+      this.logger.error('继续对话失败', error);
       throw error;
     }
   }
