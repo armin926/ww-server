@@ -52,7 +52,7 @@ export class ResumeAnalysisService {
     const model = this.aiModelFactory.createDefaultModel();
     // 第三步创建输出解析器
     const parser = new JsonOutputParser();
-    // 第四步组件链（Chain）
+    // 第四步组建链（Chain）
     const chain = prompt.pipe(model).pipe(parser);
 
     try {

@@ -124,6 +124,9 @@ export class SessionManager {
     }
   }
 
+  /**
+   * 清理过期会话
+   */
   cleanupExpiredSessions(): void {
     const now = new Date();
     const expirationTime = 1000 * 60 * 60; // 1 小时
