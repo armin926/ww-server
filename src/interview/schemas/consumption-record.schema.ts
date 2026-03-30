@@ -117,7 +117,11 @@ export class ConsumptionRecord {
 
   // ============ 元数据 ============
   @Prop({ type: SchemaTypes.Mixed })
-  metadata?: Record<string, any>; // 其他元数据
+  // 关键：用于幂等性检查
+  metadata: {
+    requestId: string; // 前端发送的请求Id
+    promptVersion: string;
+  }; // 其他元数据
 
   @Prop()
   requestId?: string; // 请求ID（用于幂等性）

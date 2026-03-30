@@ -59,7 +59,7 @@ export class ResumeAnalysisService {
       this.logger.log('开始分析简历');
       // 第五步调用链（Chain）进行分析
       const result = await chain.invoke({
-        resume_content: resumeContent,
+        resumeText: resumeContent,
         job_description: jobDescription,
       });
       this.logger.log('简历分析完成');

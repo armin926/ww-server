@@ -7,12 +7,31 @@ import { ConfigModule } from '@nestjs/config';
 import { AIModule } from '../ai/services/ai.module';
 import { ResumeAnalysisService } from './services/resume-analysis.service';
 import { ConversationContinuationService } from './services/conversation-continuation.service';
+import { MongooseModule } from '@nestjs/mongoose';
+import {
+  ConsumptionRecord,
+  ConsumptionRecordSchema,
+} from './schemas/consumption-record.schema';
+import {
+  ResumeQuizResult,
+  ResumeQuizResultSchema,
+} from './schemas/interview-quiz-reuslt.schema';
+import { User, UserSchema } from 'src/user/schemas/user.schema';
+import {
+  AIInterviewResult,
+  AIInterviewResultSchema,
+} from './schemas/ai-interview-result.schema';
 
 @Module({
   imports: [
     ConfigModule,
     AIModule,
-    // MongooseModule.forFeature([...]),
+    MongooseModule.forFeature([
+      { name: ConsumptionRecord.name, schema: ConsumptionRecordSchema },
+      { name: ResumeQuizResult.name, schema: ResumeQuizResultSchema },
+      { name: User.name, schema: UserSchema },
+      { name: AIInterviewResult.name, schema: AIInterviewResultSchema },
+    ]),
   ],
   controllers: [InterviewController],
   providers: [
