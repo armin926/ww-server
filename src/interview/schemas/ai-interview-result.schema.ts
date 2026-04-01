@@ -4,6 +4,37 @@ import { Document, Types, Schema as MongooseSchema } from 'mongoose';
 export type AIInterviewResultDocument = AIInterviewResult & Document;
 
 /**
+ * 会话状态接口（用于恢复面试）
+ */
+export interface SessionState {
+  sessionId: string;
+  resultId?: string;
+  consumptionRecordId?: string;
+  userId: string;
+  interviewType: string;
+  interviewerName: string;
+  candidateName?: string;
+  company?: string;
+  positionName?: string;
+  salaryRange?: string;
+  jd?: string;
+  resumeContent?: string;
+  conversationHistory: Array<{
+    role: 'interviewer' | 'candidate';
+    content: string;
+    timestamp: Date;
+    standardAnswer?: string;
+  }>;
+  questionCount: number;
+  startTime: Date;
+  targetDuration: number;
+  currentQuestion?: string;
+  isActive?: boolean;
+  interviewMode?: string;
+  interviewDuration?: number;
+}
+
+/**
  * 面试类型枚举
  */
 export enum AIInterviewType {
@@ -253,7 +284,7 @@ export class AIInterviewResult {
   completedAt?: Date; // 完成时间
 
   @Prop({ type: MongooseSchema.Types.Mixed })
-  sessionState?: any; // 保存完整会话状态（用于恢复）
+  sessionState?: SessionState; // 保存完整会话状态（用于恢复）
 
   @Prop({
     enum: ['pending', 'generating', 'completed', 'failed'],

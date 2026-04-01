@@ -11,7 +11,10 @@ import {
   FORMAT_INSTRUCTIONS_ANALYSIS_ONLY,
   FORMAT_INSTRUCTIONS_QUESTIONS_ONLY,
 } from '../prompt/format-instructions.prompts';
-import { buildMockInterviewPrompt } from '../prompt/mock-interview.prompts';
+import {
+  buildAssessmentPrompt,
+  buildMockInterviewPrompt,
+} from '../prompt/mock-interview.prompts';
 
 /**
  * 简历押题输入
@@ -76,6 +79,43 @@ export interface ResumeQuizOutput {
     completionTokens: number;
     totalTokens: number;
   };
+}
+
+/**
+ * 面试评估上下文输入
+ */
+export interface AssessmentContext {
+  interviewType: 'special' | 'comprehensive';
+  company?: string;
+  positionName?: string;
+  jd?: string;
+  resumeContent: string;
+  qaList: Array<{
+    question: string;
+    answer: string | string[];
+    standardAnswer?: string;
+  }>;
+  answerQualityMetrics?: {
+    totalQuestions: number;
+    avgAnswerLength: number;
+    emptyAnswersCount: number;
+  };
+}
+
+/**
+ * 面试评估输出
+ */
+export interface AssessmentResult {
+  overallScore: number;
+  overallLevel: string;
+  overallComment: string;
+  radarData: Array<{ dimension: string; score: number; description?: string }>;
+  strengths: string[];
+  weaknesses: string[];
+  improvements: string[];
+  fluencyScore: number;
+  logicScore: number;
+  professionalScore: number;
 }
 
 /**
@@ -454,5 +494,78 @@ export class InterviewAIService {
       `如果有任何问题，可以随时联系HR。祝你一切顺利！\n\n` +
       `— ${interviewerName}老师`
     );
+  }
+  /**
+   * 生成面试评估报告
+   * 基于用户的回答、职位描述、简历等信息，调用AI模型分析并生成一份完整的评估报告
+   */
+  async generateInterviewAssessmentReport(
+    context: AssessmentContext,
+  ): Promise<AssessmentResult> {
+    try {
+      // 1. 构建提示（Prompt）
+      // 根据传入的上下文信息（如面试类型、回答列表等）构建一个给AI模型的详细指令
+      const prompt = buildAssessmentPrompt(context);
+      const promptTemplate = PromptTemplate.fromTemplate(prompt);
+      // 2.初始化AI模型和处理链
+      const model = this.aiModelFactory.createDefaultModel();
+      const parser = new JsonOutputParser();
+      const chainWithParser = promptTemplate.pipe(model).pipe(parser);
+      // 记录开始生成的日志信息
+      this.logger.log(
+        `🤖 开始生成面试评估报告: type=${context.interviewType}, qaCount=${context.qaList.length}`,
+      );
+      const startTime = Date.now(); // 记录开始时间，用于计算耗时
+      // 3.调用AI模型并获取结果
+      // 异步调用处理链，并传入详细的面试数据
+      const qaListString = context.qaList
+        .map((qa, index) => {
+          const answerText = Array.isArray(qa.answer)
+            ? qa.answer.join('、')
+            : qa.answer;
+          const answerLength =
+            typeof answerText === 'string' ? answerText.length : 0;
+          return `问题${index + 1}: ${qa.question}\n用户回答: ${answerText}\n回答长度: ${answerLength}字\n标准答案: ${qa.standardAnswer || '无'}`;
+        })
+        .join('\n\n');
+      const result = (await chainWithParser.invoke({
+        interviewType: context.interviewType, // 面试类型
+        company: context.company || '', // 公司名称
+        positionName: context.positionName || '未提供', // 职位名称
+        jd: context.jd || '未提供', // 职位描述 (Job Description)
+        resumeContent: context.resumeContent, // 简历内容
+        // 将问答列表格式化成一个长字符串，包含问题、用户回答、回答长度和标准答案
+        qaList: qaListString,
+        totalQuestions: context.qaList.length, // 总问题数
+        // 如果有回答质量指标，也格式化成字符串
+        qualityMetrics: context.answerQualityMetrics
+          ? `\n## 回答质量统计\n- 总问题数: ${context.answerQualityMetrics.totalQuestions}\n- 平均回答长度: ${context.answerQualityMetrics.avgAnswerLength}字\n- 无效回答数: ${context.answerQualityMetrics.emptyAnswersCount}`
+          : '',
+      })) as Partial<AssessmentResult>;
+
+      const duration = Date.now() - startTime; // 计算生成报告的总耗时
+      this.logger.log(
+        `✅ 评估报告生成完成: 耗时=${duration}ms, overallScore=${result.overallScore}`,
+      );
+
+      // 4. 格式化并返回最终结果
+      // 从AI返回的结果中提取关键信息，并为可能缺失的字段提供默认值，确保返回对象的结构稳定
+      return {
+        overallScore: result.overallScore || 75, // 综合得分
+        overallLevel: result.overallLevel || '良好', // 综合评级
+        overallComment: result.overallComment || '面试表现良好', // 综合评语
+        radarData: result.radarData || [], // 能力雷达图数据
+        strengths: result.strengths || [], // 优点
+        weaknesses: result.weaknesses || [], // 缺点
+        improvements: result.improvements || [], // 改进建议
+        fluencyScore: result.fluencyScore || 80, // 表达流畅度得分
+        logicScore: result.logicScore || 80, // 逻辑清晰度得分
+        professionalScore: result.professionalScore || 80, // 专业知识得分
+      };
+    } catch (error) {
+      const err = error as { message: string };
+      this.logger.error(`❌ 评估报告生成失败: ${err.message}`, error);
+      throw error;
+    }
   }
 }

@@ -6,6 +6,7 @@ import {
   Request,
   Res,
   Param,
+  Get,
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
@@ -170,7 +171,7 @@ export class InterviewController {
   // 接口 3：回答面试问题
   @Post('mock/answer')
   @UseGuards(JwtAuthGuard)
-  async answerMockInterview(
+  answerMockInterview(
     @Body() dto: AnswerMockInterviewDto,
     @Request() req: RequestWithUser,
     @Res() res: ResponseWithFlush,
@@ -189,7 +190,7 @@ export class InterviewController {
       res.flush();
     }
     // 订阅进度事件
-    const subscription = await this.interviewService
+    const subscription = this.interviewService
       .answerMockInterviewWithStream(userId, dto.sessionId, dto.answer)
       .subscribe({
         next: (event) => {
@@ -249,5 +250,21 @@ export class InterviewController {
   ) {
     await this.interviewService.resumeMockInterview(req.user.userId, resultId);
     return ResponseUtil.success({ resultId }, '面试已恢复，可以继续回答');
+  }
+  /**
+   * 获取分析报告
+   * 统一接口，根据 resultId 自动识别类型（简历押题/专项面试/综合面试）
+   */
+  @Get('analysis/report/:resultId')
+  @UseGuards(JwtAuthGuard)
+  async getAnalysisReport(
+    @Param('resultId') resultId: string,
+    @Request() req: RequestWithUser,
+  ) {
+    const report = await this.interviewService.getAnalysisReport(
+      req.user.userId,
+      resultId,
+    );
+    return ResponseUtil.success(report, '查询成功');
   }
 }
